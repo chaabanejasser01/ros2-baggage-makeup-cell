@@ -1,0 +1,441 @@
+// Baggage make-up cell: the main loop, one bag at a time.
+//
+//   1. next bag               /next_bag         (belt runs until the photo-eye, tag is read)
+//                                                (asked as soon as the bag is lifted off the
+//                                                 belt: the next bag comes while the arm works)
+//   2. measure it             /detect_bag       (overhead depth camera)
+//   3. which cart?            /route_bag        (tag -> flight -> cart, check-in manifest)
+//   4. where in the cart?     /plan_placement   (next free slot)
+//      cart full?             /dispatch_cart    (tug takes it, empty cart comes) then re-plan
+//   5. pick and place         MoveIt (OMPL for free moves, straight lines near the bag)
+//   6. check where it landed  /report_placement (true pose from Gazebo)
+//   7. log                    /cell/bag_result  (metrics_logger writes the CSV)
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <future>
+#include <regex>
+#include <memory>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include <rclcpp/rclcpp.hpp>
+#include <geometry_msgs/msg/pose.hpp>
+#include <moveit/move_group_interface/move_group_interface.hpp>
+#include <moveit/planning_scene_interface/planning_scene_interface.hpp>
+#include <moveit_msgs/msg/attached_collision_object.hpp>
+#include <shape_msgs/msg/solid_primitive.hpp>
+
+#include <bag_cell_interfaces/msg/bag_result.hpp>
+#include <bag_cell_interfaces/srv/detect_bag.hpp>
+#include <bag_cell_interfaces/srv/dispatch_cart.hpp>
+#include <bag_cell_interfaces/srv/plan_placement.hpp>
+#include <bag_cell_interfaces/srv/report_placement.hpp>
+#include <bag_cell_interfaces/srv/route_bag.hpp>
+#include <bag_cell_interfaces/srv/next_bag.hpp>
+
+using namespace std::chrono_literals;
+using MoveGroup = moveit::planning_interface::MoveGroupInterface;
+using geometry_msgs::msg::Pose;
+using geometry_msgs::msg::Vector3;
+namespace srv = bag_cell_interfaces::srv;
+
+const double TOOL_LENGTH = 0.145;  // flange (tool0) -> cup face
+const double BELT_TOP = 0.50;
+const double APPROACH = 0.10;      // cup starts 10 cm above the bag top
+const double LIFT = 0.15;          // bag bottom 15 cm above the belt after the grip
+
+// tool0 pose so that the cup TIP is at (x, y, z), cup pointing down, turned by yaw
+Pose tip_pose(double x, double y, double z, double yaw)
+{
+  Pose p;
+  p.position.x = x;
+  p.position.y = y;
+  p.position.z = z + TOOL_LENGTH;
+  p.orientation.x = std::cos(yaw / 2);  // = rotZ(yaw) * rotX(180 deg)
+  p.orientation.y = std::sin(yaw / 2);
+  p.orientation.z = 0.0;
+  p.orientation.w = 0.0;
+  return p;
+}
+
+double yaw_of(const geometry_msgs::msg::Quaternion & q)
+{
+  return std::atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
+}
+
+// a box looks the same every 180 deg: smallest yaw difference modulo pi
+double box_yaw_diff(double a, double b)
+{
+  return std::fabs(std::remainder(a - b, M_PI));
+}
+
+class Cell
+{
+public:
+  explicit Cell(rclcpp::Node::SharedPtr node)
+  : node_(node), arm_(node, "ur_manipulator"), log_(node->get_logger())
+  {
+    double v = node->get_parameter("velocity_scaling").as_double();
+    arm_.setEndEffectorLink("tool0");
+    arm_.setMaxVelocityScalingFactor(v);
+    arm_.setMaxAccelerationScalingFactor(v);
+    arm_.setPlanningTime(5.0);
+
+    next_ = node->create_client<srv::NextBag>("next_bag");
+    detect_ = node->create_client<srv::DetectBag>("detect_bag");
+    route_ = node->create_client<srv::RouteBag>("route_bag");
+    plan_ = node->create_client<srv::PlanPlacement>("plan_placement");
+    report_ = node->create_client<srv::ReportPlacement>("report_placement");
+    dispatch_ = node->create_client<srv::DispatchCart>("dispatch_cart");
+    result_pub_ = node->create_publisher<bag_cell_interfaces::msg::BagResult>(
+      "/cell/bag_result", 10);
+  }
+
+  // home = the start pose: arm standing straight up, base turned to face the belt
+  // (same joint values as initial_positions in bag_cell_robot.urdf.xacro)
+  bool go_home()
+  {
+    arm_.setStartStateToCurrentState();
+    arm_.setJointValueTarget(std::vector<double>{-1.5708, -1.57, 0.0, -1.57, 0.0, 0.0});
+    MoveGroup::Plan plan;
+    bool ok = arm_.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS &&
+      arm_.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS;
+    RCLCPP_INFO(log_, "  %-32s %s", "home (standing, facing the belt)", ok ? "OK" : "FAILED");
+    return ok;
+  }
+
+  // returns false when there are no more bags.
+  // more = another bag comes after this one (ask the belt for it early)
+  bool process_bag(bool more)
+  {
+    bag_cell_interfaces::msg::BagResult r;
+    auto t0 = node_->now();
+    planning_time_ = 0.0;
+
+    // 1. next bag: belt runs until the photo-eye sees it (maybe already asked for)
+    if (!next_bag_.valid()) {request_next_bag();}
+    srv::NextBag::Response::SharedPtr spawn;
+    if (next_bag_.wait_for(120s) == std::future_status::ready) {spawn = next_bag_.get();}
+    next_bag_ = {};
+    if (!spawn || !spawn->success) {
+      RCLCPP_ERROR(log_, "no bag: %s", spawn ? spawn->message.c_str() : "belt not answering");
+      return false;
+    }
+    r.bag = spawn->name;
+    r.tag = spawn->tag;
+    r.true_size = spawn->true_size;
+    RCLCPP_INFO(log_, "==== %s at the pick zone (tag '%s')", r.bag.c_str(), r.tag.c_str());
+
+    // 2. measure
+    auto det = call<srv::DetectBag>(detect_, std::make_shared<srv::DetectBag::Request>());
+    if (!det || !det->found) {
+      finish(r, false, "camera: " + (det ? det->message : std::string("no answer")), t0);
+      remove_bag(r.bag);
+      return end_cycle(more, true);
+    }
+    r.measured_size = det->size;
+    r.position_error = std::hypot(det->pose.position.x - spawn->true_pose.position.x,
+        det->pose.position.y - spawn->true_pose.position.y);
+    r.yaw_error = box_yaw_diff(yaw_of(det->pose.orientation),
+        yaw_of(spawn->true_pose.orientation));
+    RCLCPP_INFO(log_, "camera: %s", det->message.c_str());
+
+    // 3. route
+    auto rreq = std::make_shared<srv::RouteBag::Request>();
+    rreq->tag = r.tag;
+    auto route = call<srv::RouteBag>(route_, rreq);
+    std::string cart = route ? route->cart : "cart_reject";
+    r.flight = route ? route->flight : "";
+    r.mass = route ? route->mass : 10.0;
+    r.reason = route ? route->reason : "router down";
+    RCLCPP_INFO(log_, "route: %s -> %s (%s)", r.flight.c_str(), cart.c_str(), r.reason.c_str());
+
+    // 4. slot in the cart (dispatch the cart if it is full)
+    auto plan = plan_in(cart, det->size);
+    if (!plan) {
+      dispatch(cart);
+      plan = plan_in(cart, det->size);
+    }
+    r.target_cart = cart;
+    if (!plan) {
+      finish(r, false, "no placement found", t0);
+      remove_bag(r.bag);
+      return end_cycle(more, true);
+    }
+
+    // 5. pick and place
+    const double px = det->pose.position.x;
+    const double py = det->pose.position.y;
+    const double top = BELT_TOP + det->size.z;
+    add_bag_to_scene(r.bag, det->pose, det->size);
+
+    double grip_yaw;  // bag yaw or bag yaw + 180 deg, MoveIt picks the easier one
+    bool ok = move_to(px, py, top + APPROACH, yaw_of(det->pose.orientation), "above the bag",
+      grip_yaw) &&
+      straight_to(tip_pose(px, py, top + 0.002, grip_yaw), "down onto the bag");
+    if (!ok) {
+      finish(r, false, "pick approach failed", t0);
+      remove_bag(r.bag);
+      return end_cycle(more, false);  // arm may be over the belt: home first
+    }
+    grip(r.bag, det->pose, det->size);
+
+    // the bag turns with the tool: slot yaw or slot yaw + 180 deg both line it up
+    const auto & t = plan->place_tip;
+    double place_yaw = yaw_of(t.orientation);
+    ok = straight_to(tip_pose(px, py, top + LIFT, grip_yaw), "lift");
+    // bag is off the belt: restart the belt once the arm has carried it out of the pick zone
+    if (ok && more) {request_next_bag(1500ms);}
+    ok = ok && move_to(t.position.x, t.position.y, plan->above_tip_z, place_yaw,
+        "above the slot in " + cart, place_yaw) &&
+      straight_to(tip_pose(t.position.x, t.position.y, t.position.z, place_yaw),
+        "down into " + cart);
+    release(r.bag);
+    std::this_thread::sleep_for(500ms);  // let it drop the last 2 cm
+    bool retreat = straight_to(tip_pose(t.position.x, t.position.y, plan->above_tip_z,
+        place_yaw), "retreat");
+
+    // 6. where did it really land?
+    auto rep_req = std::make_shared<srv::ReportPlacement::Request>();
+    rep_req->cart = cart;
+    rep_req->bag = r.bag;
+    rep_req->size = det->size;
+    rep_req->mass = r.mass;
+    auto rep = call<srv::ReportPlacement>(report_, rep_req);
+    r.actual_cart = rep ? rep->actual_cart : "unknown";
+    if (!ok) {remove_bag(r.bag);}
+    finish(r, ok && retreat, ok ? (retreat ? r.reason : "retreat failed") : "move failed", t0);
+    return end_cycle(more, ok && retreat);
+  }
+
+private:
+  // ask the belt for the next bag, after a delay (runs in the background)
+  void request_next_bag(std::chrono::milliseconds delay = 0ms)
+  {
+    next_bag_ = std::async(std::launch::async, [this, delay]() {
+          std::this_thread::sleep_for(delay);
+          auto f = next_->async_send_request(std::make_shared<srv::NextBag::Request>()).future;
+          return f.wait_for(130s) == std::future_status::ready ? f.get() : nullptr;
+        }).share();
+  }
+
+  // end of a bag: the belt brings the next one while the arm goes home.
+  // arm_clear = the arm is away from the belt (over a cart), so the belt can run at once.
+  bool end_cycle(bool more, bool arm_clear)
+  {
+    if (more && arm_clear && !next_bag_.valid()) {request_next_bag();}
+    go_home();
+    if (more && !next_bag_.valid()) {request_next_bag();}
+    return true;
+  }
+
+  template<typename S>
+  typename S::Response::SharedPtr call(
+    typename rclcpp::Client<S>::SharedPtr client,
+    typename S::Request::SharedPtr req, std::chrono::seconds timeout = 60s)
+  {
+    if (!client->wait_for_service(10s)) {
+      RCLCPP_ERROR(log_, "service %s not available", client->get_service_name());
+      return nullptr;
+    }
+    auto future = client->async_send_request(req);
+    if (future.wait_for(timeout) != std::future_status::ready) {
+      RCLCPP_ERROR(log_, "service %s timed out", client->get_service_name());
+      return nullptr;
+    }
+    return future.get();
+  }
+
+  srv::PlanPlacement::Response::SharedPtr plan_in(const std::string & cart, const Vector3 & size)
+  {
+    auto req = std::make_shared<srv::PlanPlacement::Request>();
+    req->cart = cart;
+    req->size = size;
+    auto res = call<srv::PlanPlacement>(plan_, req);
+    if (res) {RCLCPP_INFO(log_, "planner: %s", res->message.c_str());}
+    return res && res->ok ? res : nullptr;
+  }
+
+  void dispatch(const std::string & cart)
+  {
+    auto req = std::make_shared<srv::DispatchCart::Request>();
+    req->cart = cart;
+    auto res = call<srv::DispatchCart>(dispatch_, req);
+    if (res) {
+      RCLCPP_WARN(log_, "%s full -> dispatched with %d bags (%.0f %% fill)", cart.c_str(),
+        res->bags, 100 * res->fill_ratio);
+    }
+    std::this_thread::sleep_for(1s);  // let MoveIt get the updated scene
+  }
+
+  // Free-space move with OMPL (goes around obstacles) to the cup tip at (x, y, z).
+  // A suitcase is symmetric, so the cup may be turned by yaw OR yaw + 180 deg: both are given
+  // to MoveIt as goals and it uses whichever it reaches. reached_yaw = the one it used.
+  // The joint limits of the cell (bag_cell_description/config/joint_limits.yaml) keep the
+  // arm in one configuration family.
+  bool move_to(double x, double y, double z, double yaw, const std::string & what,
+    double & reached_yaw)
+  {
+    arm_.setStartStateToCurrentState();
+    arm_.setPoseTargets({tip_pose(x, y, z, yaw), tip_pose(x, y, z, yaw + M_PI)});
+    MoveGroup::Plan plan;
+    bool ok = arm_.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS;
+    planning_time_ += plan.planning_time;
+    ok = ok && arm_.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS;
+    reached_yaw = yaw_of(arm_.getCurrentPose().pose.orientation);
+    RCLCPP_INFO(log_, "  %-32s %s", what.c_str(), ok ? "OK" : "FAILED");
+    return ok;
+  }
+
+  bool straight_to(const Pose & target, const std::string & what)
+  {
+    arm_.setStartStateToCurrentState();
+    moveit_msgs::msg::RobotTrajectory traj;
+    // 1 cm steps; collisions off: the cup has to touch the bag, the bag has to touch the cart
+    double fraction = arm_.computeCartesianPath({target}, 0.01, traj, false);
+    bool ok = fraction > 0.99 && arm_.execute(traj) == moveit::core::MoveItErrorCode::SUCCESS;
+    RCLCPP_INFO(log_, "  %-32s %s (%.0f %% of path)", what.c_str(), ok ? "OK" : "FAILED",
+      fraction * 100);
+    return ok;
+  }
+
+  moveit_msgs::msg::CollisionObject box(const std::string & id, const Pose & pose,
+    const Vector3 & size)
+  {
+    moveit_msgs::msg::CollisionObject obj;
+    obj.header.frame_id = "world";
+    obj.id = id;
+    shape_msgs::msg::SolidPrimitive prim;
+    prim.type = prim.BOX;
+    prim.dimensions = {size.x, size.y, size.z};
+    obj.primitives.push_back(prim);
+    obj.primitive_poses.push_back(pose);
+    obj.operation = obj.ADD;
+    return obj;
+  }
+
+  // the bag on the belt is an obstacle until we grab it
+  void add_bag_to_scene(const std::string & name, const Pose & pose, const Vector3 & size)
+  {
+    scene_.applyCollisionObject(box(name, pose, size));
+  }
+
+  // suction ON = weld the bag to the wrist in Gazebo: add the DetachableJoint plugin to the
+  // bag now (it attaches as soon as it loads). Suction OFF = its detach topic (release()).
+  void grip(const std::string & name, const Pose & pose, const Vector3 & size)
+  {
+    std::smatch m;
+    std::string info = run("gz model -m " + name);
+    if (!std::regex_search(info, m, std::regex("Model: \\[(\\d+)\\]"))) {
+      throw std::runtime_error("bag " + name + " not found in Gazebo");
+    }
+    std::string req = "entity: {id: " + m[1].str() + "} plugins: {name: "
+      "\"gz::sim::systems::DetachableJoint\", filename: \"gz-sim-detachable-joint-system\", "
+      "innerxml: \"<parent_link>link</parent_link><child_model>ur</child_model>"
+      "<child_link>wrist_3_link</child_link><detach_topic>/" + name + "/detach</detach_topic>\"}";
+    run("gz service -s /world/bag_hall/entity/system/add --reqtype gz.msgs.EntityPlugin_V "
+      "--reptype gz.msgs.Boolean --timeout 3000 --req '" + req + "'");
+    moveit_msgs::msg::AttachedCollisionObject att;
+    att.link_name = "suction_tool";
+    att.touch_links = {"suction_tool", "wrist_3_link"};
+    att.object = box(name, pose, size);
+    scene_.applyAttachedCollisionObject(att);
+    RCLCPP_INFO(log_, "  %-32s OK", "grip");
+  }
+
+  void release(const std::string & name)
+  {
+    gz_topic("/" + name + "/detach");
+    moveit_msgs::msg::AttachedCollisionObject att;
+    att.link_name = "suction_tool";
+    att.object.id = name;
+    att.object.operation = moveit_msgs::msg::CollisionObject::REMOVE;  // back to the world
+    scene_.applyAttachedCollisionObject(att);
+    RCLCPP_INFO(log_, "  %-32s OK", "release");
+  }
+
+  // an operator takes the bag away (failure case)
+  void remove_bag(const std::string & name)
+  {
+    std::string cmd = "gz service -s /world/bag_hall/remove --reqtype gz.msgs.Entity "
+      "--reptype gz.msgs.Boolean --timeout 3000 --req 'name: \"" + name +
+      "\" type: MODEL' > /dev/null";
+    if (std::system(cmd.c_str()) != 0) {RCLCPP_WARN(log_, "could not remove %s", name.c_str());}
+    scene_.removeCollisionObjects({name});
+  }
+
+  void finish(bag_cell_interfaces::msg::BagResult & r, bool success, const std::string & reason,
+    const rclcpp::Time & t0)
+  {
+    r.success = success;
+    r.reason = reason;
+    r.cycle_time = (node_->now() - t0).seconds();
+    r.planning_time = planning_time_;
+    result_pub_->publish(r);
+    RCLCPP_INFO(log_, "==== %s: %s, target %s, landed in %s, %.1f s", r.bag.c_str(),
+      success ? "DONE" : "FAILED", r.target_cart.c_str(), r.actual_cart.c_str(), r.cycle_time);
+  }
+
+  static std::string run(const std::string & cmd)
+  {
+    std::string out;
+    char buf[256];
+    FILE * f = popen(cmd.c_str(), "r");
+    if (!f) {return out;}
+    while (fgets(buf, sizeof(buf), f)) {out += buf;}
+    pclose(f);
+    return out;
+  }
+
+  static void gz_topic(const std::string & topic)
+  {
+    std::string cmd = "gz topic -t " + topic + " -m gz.msgs.Empty -p 'unused: true'";
+    if (std::system(cmd.c_str()) != 0) {
+      throw std::runtime_error("gz command failed: " + cmd);
+    }
+  }
+
+  rclcpp::Node::SharedPtr node_;
+  MoveGroup arm_;
+  moveit::planning_interface::PlanningSceneInterface scene_;
+  rclcpp::Logger log_;
+  rclcpp::Client<srv::NextBag>::SharedPtr next_;
+  rclcpp::Client<srv::DetectBag>::SharedPtr detect_;
+  rclcpp::Client<srv::RouteBag>::SharedPtr route_;
+  rclcpp::Client<srv::PlanPlacement>::SharedPtr plan_;
+  rclcpp::Client<srv::ReportPlacement>::SharedPtr report_;
+  rclcpp::Client<srv::DispatchCart>::SharedPtr dispatch_;
+  rclcpp::Publisher<bag_cell_interfaces::msg::BagResult>::SharedPtr result_pub_;
+  double planning_time_ = 0.0;
+  std::shared_future<srv::NextBag::Response::SharedPtr> next_bag_;
+};
+
+int main(int argc, char ** argv)
+{
+  rclcpp::init(argc, argv);
+  auto node = std::make_shared<rclcpp::Node>(
+    "cell_node", rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(true));
+  if (!node->has_parameter("num_bags")) {node->declare_parameter("num_bags", 10);}
+  if (!node->has_parameter("velocity_scaling")) {node->declare_parameter("velocity_scaling", 0.6);}
+  rclcpp::executors::MultiThreadedExecutor exec;
+  exec.add_node(node);
+  std::thread spinner([&exec]() {exec.spin();});
+
+  {
+    Cell cell(node);
+    // no move at startup: the arm waits in its start pose until the first bag stops
+    const int n = node->get_parameter("num_bags").as_int();
+    for (int i = 0; i < n && rclcpp::ok(); ++i) {
+      RCLCPP_INFO(node->get_logger(), "---------------- bag %d / %d", i + 1, n);
+      if (!cell.process_bag(i + 1 < n)) {break;}
+    }
+    cell.go_home();
+  }
+  RCLCPP_INFO(node->get_logger(), "Done. Results in the metrics_logger folder (summary.md).");
+  rclcpp::shutdown();
+  spinner.join();
+  return 0;
+}

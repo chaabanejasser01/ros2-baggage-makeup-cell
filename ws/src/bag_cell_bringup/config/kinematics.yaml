@@ -1,0 +1,8 @@
+# IK solver for the arm.
+# TRAC-IK instead of the default KDL: KDL often fails near joint limits, and we restrict
+# the joint limits (bag_cell_description/config/joint_limits.yaml) to keep one arm posture.
+# solve_type Distance = pick the solution closest to the current joints (smooth, no flips).
+ur_manipulator:
+  kinematics_solver: trac_ik_kinematics_plugin/TRAC_IKKinematicsPlugin
+  kinematics_solver_timeout: 0.05
+  solve_type: Distance

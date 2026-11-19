@@ -1,0 +1,8 @@
+# The robot released a bag: check where it really landed and update the cart map.
+string cart
+string bag
+geometry_msgs/Vector3 size
+float64 mass
+---
+string actual_cart                 # cart_a, cart_b, cart_reject, belt, floor
+geometry_msgs/Pose pose

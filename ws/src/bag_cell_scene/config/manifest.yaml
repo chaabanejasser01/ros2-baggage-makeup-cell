@@ -1,0 +1,48 @@
+# Check-in manifest: what the airline check-in system knows about each bag,
+# in the order the bags arrive on the belt. The tag reader gives the tag number,
+# the flight router looks it up here. TU880 is not built at this cell -> reject.
+# Bag sizes: cabin 0.40x0.25x0.20, medium 0.55x0.35x0.25, large 0.70x0.45x0.28 m.
+flights:
+  TU214: cart_a
+  BJ552: cart_b
+bags:
+  - {tag: "0526612300", flight: BJ552, type: cabin, mass: 5.2}
+  - {tag: "0199612307", flight: TU214, type: cabin, mass: 6.5}
+  - {tag: "0199612314", flight: TU214, type: medium, mass: 7.7}
+  - {tag: "0526612321", flight: BJ552, type: cabin, mass: 4.1}
+  - {tag: "0526612328", flight: BJ552, type: medium, mass: 6.2}
+  - {tag: "0199612335", flight: TU214, type: large, mass: 8.8}
+  - {tag: "0199612342", flight: TU880, type: cabin, mass: 6.8}
+  - {tag: "0199612349", flight: TU880, type: cabin, mass: 5.7}
+  - {tag: "0526612356", flight: BJ552, type: cabin, mass: 6.9}
+  - {tag: "0199612363", flight: TU214, type: large, mass: 9.7}
+  - {tag: "0526612370", flight: BJ552, type: medium, mass: 6.4}
+  - {tag: "0199612377", flight: TU214, type: large, mass: 8.6}
+  - {tag: "0199612384", flight: TU214, type: cabin, mass: 5.7}
+  - {tag: "0199612391", flight: TU214, type: medium, mass: 6.3}
+  - {tag: "0199612398", flight: TU214, type: large, mass: 8.1}
+  - {tag: "0199612405", flight: TU214, type: medium, mass: 8.0}
+  - {tag: "0526612412", flight: BJ552, type: medium, mass: 7.4}
+  - {tag: "0526612419", flight: BJ552, type: medium, mass: 6.9}
+  - {tag: "0199612426", flight: TU214, type: large, mass: 9.6}
+  - {tag: "0199612433", flight: TU214, type: large, mass: 8.6}
+  - {tag: "0526612440", flight: BJ552, type: medium, mass: 8.2}
+  - {tag: "0526612447", flight: BJ552, type: large, mass: 10.0}
+  - {tag: "0199612454", flight: TU214, type: large, mass: 8.8}
+  - {tag: "0526612461", flight: BJ552, type: cabin, mass: 6.8}
+  - {tag: "0526612468", flight: BJ552, type: cabin, mass: 6.9}
+  - {tag: "0199612475", flight: TU214, type: large, mass: 9.1}
+  - {tag: "0526612482", flight: BJ552, type: medium, mass: 8.1}
+  - {tag: "0199612489", flight: TU880, type: medium, mass: 7.7}
+  - {tag: "0526612496", flight: BJ552, type: cabin, mass: 6.5}
+  - {tag: "0199612503", flight: TU214, type: medium, mass: 8.1}
+  - {tag: "0199612510", flight: TU214, type: cabin, mass: 6.2}
+  - {tag: "0526612517", flight: BJ552, type: large, mass: 9.2}
+  - {tag: "0526612524", flight: BJ552, type: medium, mass: 8.1}
+  - {tag: "0526612531", flight: BJ552, type: cabin, mass: 6.8}
+  - {tag: "0526612538", flight: BJ552, type: cabin, mass: 5.8}
+  - {tag: "0526612545", flight: BJ552, type: cabin, mass: 4.7}
+  - {tag: "0526612552", flight: BJ552, type: cabin, mass: 6.2}
+  - {tag: "0526612559", flight: BJ552, type: medium, mass: 8.8}
+  - {tag: "0526612566", flight: BJ552, type: cabin, mass: 4.5}
+  - {tag: "0526612573", flight: BJ552, type: large, mass: 8.6}

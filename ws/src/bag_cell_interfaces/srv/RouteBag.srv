@@ -1,0 +1,8 @@
+# Which cart does this bag tag go to? (looked up in the check-in manifest)
+string tag
+---
+bool known
+string flight
+string cart                        # cart_a, cart_b or cart_reject
+float64 mass                       # kg, from check-in
+string reason

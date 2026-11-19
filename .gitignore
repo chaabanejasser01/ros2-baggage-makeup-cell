@@ -1,0 +1,18 @@
+# colcon build output
+ws/build/
+ws/install/
+ws/log/
+
+# Python
+__pycache__/
+*.pyc
+
+# Run results (keep one example run, see README)
+results/*
+!results/run_20261118_224155/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

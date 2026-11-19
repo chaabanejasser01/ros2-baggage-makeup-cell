@@ -1,0 +1,8 @@
+# Where should this bag go inside the cart? (next free slot)
+string cart
+geometry_msgs/Vector3 size         # x long, y short, z height
+---
+bool ok                            # false = cart full
+string message
+geometry_msgs/Pose place_tip       # cup tip pose when releasing (orientation = bag yaw)
+float64 above_tip_z                # safe tip height above the place pose

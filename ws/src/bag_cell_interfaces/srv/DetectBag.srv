@@ -1,0 +1,6 @@
+# Measure the bag in the pick zone with the overhead depth camera.
+---
+bool found
+geometry_msgs/Pose pose            # bag centre, yaw along the long side
+geometry_msgs/Vector3 size         # x long side, y short side, z height
+string message

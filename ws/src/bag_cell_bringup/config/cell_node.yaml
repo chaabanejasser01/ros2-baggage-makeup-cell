@@ -1,0 +1,6 @@
+# Parameters of the cell node (the robot's main loop).
+cell_node:
+  ros__parameters:
+    use_sim_time: true
+    num_bags: 10
+    velocity_scaling: 0.6
