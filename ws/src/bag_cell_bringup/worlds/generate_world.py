@@ -28,7 +28,7 @@ RUBBER = (0.07, 0.07, 0.07)
 YELLOW = (0.95, 0.75, 0.05)
 WHITE = (0.95, 0.95, 0.95)
 RED = (0.80, 0.10, 0.10)
-BLUE_A, GREEN_B, RED_R = (0.15, 0.30, 0.70), (0.15, 0.55, 0.25), (0.75, 0.15, 0.12)
+BLUE_A, GREEN_B = (0.15, 0.30, 0.70), (0.15, 0.55, 0.25)
 
 BELT_Y0, BELT_Y1 = -5.0, 1.0      # belt runs from y0 to y1, top at z = 0.5
 BELT_X, BELT_W = 0.9, 0.8        # belt centre line and width: x 0.5 .. 1.3
@@ -122,14 +122,13 @@ def make_textures():
         img.save(os.path.join(TEX_DIR, fname))
 
     amber = (255, 190, 40)
+    # flights change over the day (see the flight board), so the signs only name the position
     sign("sign_cart_a.png", (12, 20, 40), (40, 80, 200),
-         [("CART A", 40, (200, 200, 200)), ("TU 214  PARIS-ORY", 84, amber),
-          ("STD 14:35", 44, (230, 230, 230))])
+         [("MAKE-UP", 40, (200, 200, 200)), ("POSITION A", 84, amber),
+          ("SEE FLIGHT BOARD", 44, (230, 230, 230))])
     sign("sign_cart_b.png", (12, 20, 40), (40, 150, 70),
-         [("CART B", 40, (200, 200, 200)), ("BJ 552  LYON", 84, amber),
-          ("STD 15:10", 44, (230, 230, 230))])
-    sign("sign_reject.png", (60, 8, 8), (220, 40, 30),
-         [("REJECT", 90, (255, 255, 255)), ("NO-READ  /  UNKNOWN FLIGHT", 46, (255, 210, 210))])
+         [("MAKE-UP", 40, (200, 200, 200)), ("POSITION B", 84, amber),
+          ("SEE FLIGHT BOARD", 44, (230, 230, 230))])
     sign("warning_robot.png", (250, 200, 20), None,
          [("DANGER", 90, (0, 0, 0)), ("ROBOT CELL - KEEP OUT", 60, (0, 0, 0))])
     root = os.path.join(TEX_DIR, "..", "..")
@@ -166,7 +165,6 @@ def room():
     rect(m, -1.95, -1.9, 1.8, 1.9, YELLOW, 0.08)
     rect(m, -0.75, 0.4, 0.55, 1.3)
     rect(m, -0.75, -1.3, 0.55, -0.4)
-    rect(m, -1.25, -0.5, -0.45, 0.5)
     return m
 
 
@@ -232,10 +230,10 @@ def tag_reader():
 
 
 # ---------------------------------------------------------------- the cell
-def cart(name, pose, color, back, towbar, L=1.1, W=0.75):
+def cart(name, pose, color, back, L=1.6, W=1.2):
     """Baggage dolly L x W, deck at 0.35 m, 0.3 m walls on 3 sides (front open).
     Collision = base box + 3 walls (same as scene_publisher.py).
-    back = +1 / -1: back wall on local +y / -y. towbar: 'x-' or 'y+'."""
+    back = +1 / -1: back wall on local +y / -y. Tow bar on the -x end (west, the tug side)."""
     m = Model(name, pose)
     walls = (("back", (L, 0.03, 0.3), (0, back * (W / 2 - 0.015), 0.5)),
              ("end1", (0.03, W, 0.3), (L / 2 - 0.015, 0, 0.5)),
@@ -251,10 +249,7 @@ def cart(name, pose, color, back, towbar, L=1.1, W=0.75):
     for x in (-L / 2 + 0.12, L / 2 - 0.12):
         for y in (-W / 2 + 0.06, W / 2 - 0.06):
             m.cyl(0.11, 0.07, (x, y, 0.11, PI / 2, 0, 0), RUBBER)         # wheels
-    if towbar == "x-":
-        m.box((0.55, 0.04, 0.04), (-L / 2 - 0.28, 0, 0.18), DARK)
-    else:
-        m.box((0.04, 0.55, 0.04), (0, back * (W / 2 + 0.28), 0.18), DARK)
+    m.box((0.55, 0.04, 0.04), (-L / 2 - 0.28, 0, 0.18), DARK)                # tow bar
     return m
 
 
@@ -291,17 +286,16 @@ def fence():
     m.box((X1 - X0, 0.02, 0.9), (BELT_X, -1.75, 1.55), PANEL, collide=True, alpha=0.45)
     run(1.65, -1.75, 1.65, 1.75)                      # east
     m.box((0.03, 0.8, 0.2), (1.68, 0.0, 1.6), YELLOW, tex="warning_robot.png")
-    run(-1.8, -1.75, -1.8, -1.25)                     # west: cart openings
-    run(-1.8, 1.25, -1.8, 1.75)
-    for y in (-1.25, -0.44, 0.44, 1.25):              # light-curtain posts
+    # west: open for the carts (1.2 m wide openings), light-curtain posts on each side
+    run(-1.8, -0.44, -1.8, 0.44)                      # closed between the two carts
+    for y in (-1.7, -0.44, 0.44, 1.7):
         m.box((0.08, 0.08, 1.9), (-1.8, y, 0.95), YELLOW, collide=True)
         m.box((0.02, 0.03, 1.6), (-1.75, y, 0.9), RED, emissive=0.8)
     # one sign above each cart opening, facing the operators outside
-    for y in (-1.6, 1.6):
+    for y in (-1.75, 1.75):
         m.box((0.08, 0.08, 2.7), (-2.0, y, 1.35), DARK, collide=True)
-    m.box((0.08, 3.3, 0.08), (-2.0, 0, 2.7), DARK)
-    for y, tex in ((0.85, "sign_cart_a.png"), (-0.85, "sign_cart_b.png"),
-                   (0.0, "sign_reject.png")):
+    m.box((0.08, 3.6, 0.08), (-2.0, 0, 2.7), DARK)
+    for y, tex in ((1.05, "sign_cart_a.png"), (-1.05, "sign_cart_b.png")):
         m.box((0.03, 0.8, 0.2), (-2.0, y, 2.5), WHITE, tex=tex)
     return m
 
@@ -339,7 +333,7 @@ HEADER = """<?xml version="1.0"?>
 <sdf version="1.9">
   <world name="bag_hall">
     <physics name="1ms" type="ignored">
-      <max_step_size>0.001</max_step_size>
+      <max_step_size>0.002</max_step_size>
       <real_time_factor>1.0</real_time_factor>
     </physics>
     <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
@@ -363,9 +357,8 @@ HEADER = """<?xml version="1.0"?>
 
 def build(extra=""):
     models = [room(), belt(), photo_eye(), tag_reader(), pedestal(), fence(), camera_mast(),
-              cart("cart_a", (-0.1, 0.85, 0, 0, 0, 0), BLUE_A, 1, "x-"),
-              cart("cart_b", (-0.1, -0.85, 0, 0, 0, 0), GREEN_B, -1, "x-"),
-              cart("cart_reject", (-0.85, 0, 0, 0, 0, 1.5708), RED_R, 1, "y+", 0.8, 0.6)]
+              cart("cart_a", (-0.35, 1.05, 0, 0, 0, 0), BLUE_A, 1),
+              cart("cart_b", (-0.35, -1.05, 0, 0, 0, 0), GREEN_B, -1)]
     return HEADER + CAMERA + "".join(m.sdf() for m in models) + extra + "  </world>\n</sdf>\n"
 
 

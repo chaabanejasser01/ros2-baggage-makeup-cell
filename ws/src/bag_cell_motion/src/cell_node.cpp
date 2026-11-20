@@ -12,14 +12,20 @@
 //   7. log                    /cell/bag_result  (metrics_logger writes the CSV)
 #include <chrono>
 #include <cmath>
-#include <cstdio>
-#include <cstdlib>
 #include <future>
-#include <regex>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include <gz/msgs/boolean.pb.h>
+#include <gz/msgs/empty.pb.h>
+#include <gz/msgs/entity.pb.h>
+#include <gz/msgs/entity_plugin_v.pb.h>
+#include <gz/msgs/pose_v.pb.h>
+#include <gz/transport/Node.hh>
 
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose.hpp>
@@ -41,11 +47,13 @@ using MoveGroup = moveit::planning_interface::MoveGroupInterface;
 using geometry_msgs::msg::Pose;
 using geometry_msgs::msg::Vector3;
 namespace srv = bag_cell_interfaces::srv;
+using bag_cell_interfaces::msg::BagResult;
 
 const double TOOL_LENGTH = 0.145;  // flange (tool0) -> cup face
 const double BELT_TOP = 0.50;
 const double APPROACH = 0.10;      // cup starts 10 cm above the bag top
 const double LIFT = 0.15;          // bag bottom 15 cm above the belt after the grip
+const std::string WORLD = "/world/bag_hall";
 
 // tool0 pose so that the cup TIP is at (x, y, z), cup pointing down, turned by yaw
 Pose tip_pose(double x, double y, double z, double yaw)
@@ -90,8 +98,9 @@ public:
     plan_ = node->create_client<srv::PlanPlacement>("plan_placement");
     report_ = node->create_client<srv::ReportPlacement>("report_placement");
     dispatch_ = node->create_client<srv::DispatchCart>("dispatch_cart");
-    result_pub_ = node->create_publisher<bag_cell_interfaces::msg::BagResult>(
-      "/cell/bag_result", 10);
+    result_pub_ = node->create_publisher<BagResult>("/cell/bag_result", 10);
+    // Gazebo entity ids of the bags (needed to add the grip plugin to a bag)
+    gz_.Subscribe(WORLD + "/dynamic_pose/info", &Cell::on_gz_poses, this);
   }
 
   // home = the start pose: arm standing straight up, base turned to face the belt
@@ -107,118 +116,167 @@ public:
     return ok;
   }
 
-  // returns false when there are no more bags.
+  // One bag, start to finish (the 7 steps at the top of this file).
+  // Returns false when there are no more bags.
   // more = another bag comes after this one (ask the belt for it early)
   bool process_bag(bool more)
   {
-    bag_cell_interfaces::msg::BagResult r;
-    auto t0 = node_->now();
+    BagResult r;
     planning_time_ = 0.0;
 
-    // 1. next bag: belt runs until the photo-eye sees it (maybe already asked for)
-    if (!next_bag_.valid()) {request_next_bag();}
-    srv::NextBag::Response::SharedPtr spawn;
-    if (next_bag_.wait_for(120s) == std::future_status::ready) {spawn = next_bag_.get();}
-    next_bag_ = {};
-    if (!spawn || !spawn->success) {
-      RCLCPP_ERROR(log_, "no bag: %s", spawn ? spawn->message.c_str() : "belt not answering");
-      return false;
-    }
-    r.bag = spawn->name;
-    r.tag = spawn->tag;
-    r.true_size = spawn->true_size;
+    // 1. the bag at the photo-eye
+    auto bag = wait_for_bag();
+    if (!bag) {return false;}
+    const auto t0 = node_->now();   // cycle time = from the bag at the pick zone to arm free
+    r.bag = bag->name;
+    r.tag = bag->tag;
+    r.true_size = bag->true_size;
     RCLCPP_INFO(log_, "==== %s at the pick zone (tag '%s')", r.bag.c_str(), r.tag.c_str());
 
-    // 2. measure
+    // 2. measure it
     auto det = call<srv::DetectBag>(detect_, std::make_shared<srv::DetectBag::Request>());
     if (!det || !det->found) {
-      finish(r, false, "camera: " + (det ? det->message : std::string("no answer")), t0);
-      remove_bag(r.bag);
-      return end_cycle(more, true);
+      return give_up(r, "camera: " + (det ? det->message : std::string("no answer")), t0,
+          more, true);
     }
-    r.measured_size = det->size;
-    r.position_error = std::hypot(det->pose.position.x - spawn->true_pose.position.x,
-        det->pose.position.y - spawn->true_pose.position.y);
-    r.yaw_error = box_yaw_diff(yaw_of(det->pose.orientation),
-        yaw_of(spawn->true_pose.orientation));
-    RCLCPP_INFO(log_, "camera: %s", det->message.c_str());
+    score_camera(r, *det, *bag);
 
-    // 3. route
-    auto rreq = std::make_shared<srv::RouteBag::Request>();
-    rreq->tag = r.tag;
-    auto route = call<srv::RouteBag>(route_, rreq);
-    std::string cart = route ? route->cart : "cart_reject";
-    r.flight = route ? route->flight : "";
-    r.mass = route ? route->mass : 10.0;
-    r.reason = route ? route->reason : "router down";
-    RCLCPP_INFO(log_, "route: %s -> %s (%s)", r.flight.c_str(), cart.c_str(), r.reason.c_str());
+    // 3. which cart? ("" = problem bag: no-read, early, late, mis-sorted. The robot does not
+    //    take it: it is taken off the belt at once and handled by hand.)
+    std::string cart = route(r);
+    if (cart.empty()) {return give_up(r, "problem bag (" + r.reason + "): taken off by operator",
+          t0, more, true);}
 
-    // 4. slot in the cart (dispatch the cart if it is full)
+    // 4. where in the cart? (cart full: it is dispatched, an empty one comes)
     auto plan = plan_in(cart, det->size);
     if (!plan) {
-      dispatch(cart);
+      dispatch(cart, r.flight);
       plan = plan_in(cart, det->size);
     }
     r.target_cart = cart;
-    if (!plan) {
-      finish(r, false, "no placement found", t0);
-      remove_bag(r.bag);
-      return end_cycle(more, true);
+    if (!plan) {return give_up(r, "no placement found", t0, more, true);}
+
+    // 5. pick it up (if that fails the arm may be over the belt: home first)
+    std::string why;
+    if (!pick(r.bag, *det, why)) {return give_up(r, why, t0, more, false);}
+    // the bag is off the belt (it restarts by itself): ask for the next one meanwhile
+    if (more) {request_next_bag();}
+
+    // 6. into the cart. Never let go over the belt (the bag would fall into the photo-eye
+    //    beam and pass for the next one).
+    bool retreat = false;
+    if (!place(cart, *plan, r.bag, retreat)) {   // still holding it: home, operator takes it
+      go_home();
+      release(r.bag);
+      return give_up(r, "no path to " + cart + ", bag taken by operator", t0, more, true);
     }
 
-    // 5. pick and place
-    const double px = det->pose.position.x;
-    const double py = det->pose.position.y;
-    const double top = BELT_TOP + det->size.z;
-    add_bag_to_scene(r.bag, det->pose, det->size);
-
-    double grip_yaw;  // bag yaw or bag yaw + 180 deg, MoveIt picks the easier one
-    bool ok = move_to(px, py, top + APPROACH, yaw_of(det->pose.orientation), "above the bag",
-      grip_yaw) &&
-      straight_to(tip_pose(px, py, top + 0.002, grip_yaw), "down onto the bag");
-    if (!ok) {
-      finish(r, false, "pick approach failed", t0);
-      remove_bag(r.bag);
-      return end_cycle(more, false);  // arm may be over the belt: home first
-    }
-    grip(r.bag, det->pose, det->size);
-
-    // the bag turns with the tool: slot yaw or slot yaw + 180 deg both line it up
-    const auto & t = plan->place_tip;
-    double place_yaw = yaw_of(t.orientation);
-    ok = straight_to(tip_pose(px, py, top + LIFT, grip_yaw), "lift");
-    // bag is off the belt: restart the belt once the arm has carried it out of the pick zone
-    if (ok && more) {request_next_bag(1500ms);}
-    ok = ok && move_to(t.position.x, t.position.y, plan->above_tip_z, place_yaw,
-        "above the slot in " + cart, place_yaw) &&
-      straight_to(tip_pose(t.position.x, t.position.y, t.position.z, place_yaw),
-        "down into " + cart);
-    release(r.bag);
-    std::this_thread::sleep_for(500ms);  // let it drop the last 2 cm
-    bool retreat = straight_to(tip_pose(t.position.x, t.position.y, plan->above_tip_z,
-        place_yaw), "retreat");
-
-    // 6. where did it really land?
-    auto rep_req = std::make_shared<srv::ReportPlacement::Request>();
-    rep_req->cart = cart;
-    rep_req->bag = r.bag;
-    rep_req->size = det->size;
-    rep_req->mass = r.mass;
-    auto rep = call<srv::ReportPlacement>(report_, rep_req);
-    r.actual_cart = rep ? rep->actual_cart : "unknown";
-    if (!ok) {remove_bag(r.bag);}
-    finish(r, ok && retreat, ok ? (retreat ? r.reason : "retreat failed") : "move failed", t0);
-    return end_cycle(more, ok && retreat);
+    // 7. where did it really land? then log the bag
+    r.actual_cart = report(cart, r, det->size);
+    finish(r, retreat, retreat ? r.reason : "retreat failed", t0);
+    return end_cycle(more, retreat);
   }
 
 private:
+  // ---- the steps of process_bag()
+
+  // wait for the bag at the photo-eye (asked for early, or ask now)
+  srv::NextBag::Response::SharedPtr wait_for_bag()
+  {
+    if (!next_bag_.valid()) {request_next_bag();}
+    srv::NextBag::Response::SharedPtr bag;
+    // (long wait: between two flights the belt can be empty for a while)
+    if (next_bag_.wait_for(900s) == std::future_status::ready) {bag = next_bag_.get();}
+    next_bag_ = {};
+    if (!bag || !bag->success) {
+      RCLCPP_ERROR(log_, "no bag: %s", bag ? bag->message.c_str() : "belt not answering");
+      return nullptr;
+    }
+    return bag;
+  }
+
+  // how far off was the camera? (true pose from Gazebo, for the metrics only)
+  void score_camera(BagResult & r, const srv::DetectBag::Response & det,
+    const srv::NextBag::Response & bag)
+  {
+    r.measured_size = det.size;
+    r.position_error = std::hypot(det.pose.position.x - bag.true_pose.position.x,
+        det.pose.position.y - bag.true_pose.position.y);
+    r.yaw_error = box_yaw_diff(yaw_of(det.pose.orientation), yaw_of(bag.true_pose.orientation));
+    RCLCPP_INFO(log_, "camera: %s", det.message.c_str());
+  }
+
+  // tag -> flight -> cart (router down: "" = operator)
+  std::string route(BagResult & r)
+  {
+    auto req = std::make_shared<srv::RouteBag::Request>();
+    req->tag = r.tag;
+    auto res = call<srv::RouteBag>(route_, req);
+    std::string cart = res ? res->cart : "";
+    r.flight = res ? res->flight : "";
+    r.mass = res ? res->mass : 10.0;
+    r.reason = res ? res->reason : "router down";
+    RCLCPP_INFO(log_, "route: %s -> %s (%s)", r.flight.c_str(), cart.c_str(), r.reason.c_str());
+    return cart;
+  }
+
+  // above the bag, straight down onto it, suction on, straight up
+  bool pick(const std::string & bag, const srv::DetectBag::Response & det, std::string & why)
+  {
+    const double px = det.pose.position.x;
+    const double py = det.pose.position.y;
+    const double top = BELT_TOP + det.size.z;
+    add_bag_to_scene(bag, det.pose, det.size);
+    double yaw;   // bag yaw or bag yaw + 180 deg, MoveIt picks the easier one
+    if (!move_to(px, py, top + APPROACH, yaw_of(det.pose.orientation), "above the bag", yaw) ||
+      !straight_to(tip_pose(px, py, top + 0.002, yaw), "down onto the bag"))
+    {
+      why = "pick approach failed";
+      return false;
+    }
+    if (!grip(bag, det.pose, det.size)) {
+      why = "grip failed";
+      return false;
+    }
+    if (!straight_to(tip_pose(px, py, top + LIFT, yaw), "lift")) {
+      release(bag);   // still just above the belt: set it down, an operator takes it off
+      why = "lift failed";
+      return false;
+    }
+    return true;
+  }
+
+  // where did the bag really land? (cart manager reads it from Gazebo)
+  std::string report(const std::string & cart, const BagResult & r, const Vector3 & size)
+  {
+    auto req = std::make_shared<srv::ReportPlacement::Request>();
+    req->cart = cart;
+    req->bag = r.bag;
+    req->size = size;
+    req->mass = r.mass;
+    auto res = call<srv::ReportPlacement>(report_, req);
+    return res ? res->actual_cart : "unknown";
+  }
+
+  // the bag failed: an operator takes it away, log it, go on with the next one
+  bool give_up(BagResult & r, const std::string & why, const rclcpp::Time & t0, bool more,
+    bool arm_clear)
+  {
+    remove_bag(r.bag);
+    finish(r, false, why, t0);
+    return end_cycle(more, arm_clear);
+  }
+
+  // ---- helpers
   // ask the belt for the next bag, after a delay (runs in the background)
   void request_next_bag(std::chrono::milliseconds delay = 0ms)
   {
     next_bag_ = std::async(std::launch::async, [this, delay]() {
           std::this_thread::sleep_for(delay);
+          // (a request sent before the service is discovered is lost: the cell would wait forever)
+          if (!next_->wait_for_service(30s)) {return srv::NextBag::Response::SharedPtr();}
           auto f = next_->async_send_request(std::make_shared<srv::NextBag::Request>()).future;
-          return f.wait_for(130s) == std::future_status::ready ? f.get() : nullptr;
+          return f.wait_for(910s) == std::future_status::ready ? f.get() : nullptr;
         }).share();
   }
 
@@ -227,7 +285,11 @@ private:
   bool end_cycle(bool more, bool arm_clear)
   {
     if (more && arm_clear && !next_bag_.valid()) {request_next_bag();}
-    go_home();
+    // next bag at the photo-eye (or arriving within 1.5 s): go straight to it, the arm is
+    // over a cart, out of the camera view. Otherwise wait at home, out of the way.
+    bool waiting = arm_clear && next_bag_.valid() &&
+      next_bag_.wait_for(1500ms) == std::future_status::ready;
+    if (!waiting) {go_home();}
     if (more && !next_bag_.valid()) {request_next_bag();}
     return true;
   }
@@ -259,10 +321,12 @@ private:
     return res && res->ok ? res : nullptr;
   }
 
-  void dispatch(const std::string & cart)
+  void dispatch(const std::string & cart, const std::string & flight)
   {
     auto req = std::make_shared<srv::DispatchCart::Request>();
     req->cart = cart;
+    req->flight = flight;
+    req->reason = "full";
     auto res = call<srv::DispatchCart>(dispatch_, req);
     if (res) {
       RCLCPP_WARN(log_, "%s full -> dispatched with %d bags (%.0f %% fill)", cart.c_str(),
@@ -276,14 +340,42 @@ private:
   // to MoveIt as goals and it uses whichever it reaches. reached_yaw = the one it used.
   // The joint limits of the cell (bag_cell_description/config/joint_limits.yaml) keep the
   // arm in one configuration family.
+  // Put the held bag in the cart: above the slot, straight down, let go, back up.
+  // Returns false only if the arm could not get above the cart (it still holds the bag).
+  bool place(const std::string & cart, const srv::PlanPlacement::Response & p,
+    const std::string & bag, bool & retreat_ok)
+  {
+    const auto & t = p.place_tip;
+    double yaw = yaw_of(t.orientation);   // slot yaw or + 180 deg: both line the bag up
+    if (!move_to(t.position.x, t.position.y, p.above_tip_z, yaw, "above the slot in " + cart,
+      yaw))
+    {
+      return false;
+    }
+    // (if this stops short, the bag just drops a bit further into the cart)
+    straight_to(tip_pose(t.position.x, t.position.y, t.position.z, yaw), "down into " + cart);
+    release(bag);
+    std::this_thread::sleep_for(300ms);  // let it drop the last 2 cm
+    retreat_ok = straight_to(tip_pose(t.position.x, t.position.y, p.above_tip_z, yaw),
+        "retreat");
+    return true;
+  }
+
   bool move_to(double x, double y, double z, double yaw, const std::string & what,
     double & reached_yaw)
   {
     arm_.setStartStateToCurrentState();
     arm_.setPoseTargets({tip_pose(x, y, z, yaw), tip_pose(x, y, z, yaw + M_PI)});
     MoveGroup::Plan plan;
-    bool ok = arm_.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS;
-    planning_time_ += plan.planning_time;
+    // OMPL is random: now and then its path fails MoveIt's final collision check (e.g. the
+    // hanging bag grazes the belt end stop). A new try usually finds a clean one.
+    bool ok = false;
+    for (int attempt = 0; attempt < 3 && !ok; ++attempt) {
+      ok = arm_.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS;
+      planning_time_ += plan.planning_time;
+      if (!ok) {RCLCPP_WARN(log_, "  %-32s plan %d failed, trying again", what.c_str(),
+          attempt + 1);}
+    }
     ok = ok && arm_.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS;
     reached_yaw = yaw_of(arm_.getCurrentPose().pose.orientation);
     RCLCPP_INFO(log_, "  %-32s %s", what.c_str(), ok ? "OK" : "FAILED");
@@ -325,30 +417,52 @@ private:
 
   // suction ON = weld the bag to the wrist in Gazebo: add the DetachableJoint plugin to the
   // bag now (it attaches as soon as it loads). Suction OFF = its detach topic (release()).
-  void grip(const std::string & name, const Pose & pose, const Vector3 & size)
+  // Talks to Gazebo with gz-transport directly (no 'gz' command line: ~1 s per call).
+  bool grip(const std::string & name, const Pose & pose, const Vector3 & size)
   {
-    std::smatch m;
-    std::string info = run("gz model -m " + name);
-    if (!std::regex_search(info, m, std::regex("Model: \\[(\\d+)\\]"))) {
-      throw std::runtime_error("bag " + name + " not found in Gazebo");
+    uint64_t id = 0;
+    for (int i = 0; i < 40 && !id; ++i) {   // the pose stream has every moving model
+      {
+        std::lock_guard<std::mutex> lock(ids_mutex_);
+        auto it = gz_ids_.find(name);
+        if (it != gz_ids_.end()) {id = it->second;}
+      }
+      if (!id) {std::this_thread::sleep_for(50ms);}
     }
-    std::string req = "entity: {id: " + m[1].str() + "} plugins: {name: "
-      "\"gz::sim::systems::DetachableJoint\", filename: \"gz-sim-detachable-joint-system\", "
-      "innerxml: \"<parent_link>link</parent_link><child_model>ur</child_model>"
-      "<child_link>wrist_3_link</child_link><detach_topic>/" + name + "/detach</detach_topic>\"}";
-    run("gz service -s /world/bag_hall/entity/system/add --reqtype gz.msgs.EntityPlugin_V "
-      "--reptype gz.msgs.Boolean --timeout 3000 --req '" + req + "'");
+    if (!id) {
+      RCLCPP_ERROR(log_, "  %-32s FAILED (%s not in Gazebo)", "grip", name.c_str());
+      return false;
+    }
+    gz::msgs::EntityPlugin_V req;
+    req.mutable_entity()->set_id(id);
+    auto * plugin = req.add_plugins();
+    plugin->set_name("gz::sim::systems::DetachableJoint");
+    plugin->set_filename("gz-sim-detachable-joint-system");
+    plugin->set_innerxml("<parent_link>link</parent_link><child_model>ur</child_model>"
+      "<child_link>wrist_3_link</child_link><detach_topic>/" + name + "/detach</detach_topic>");
+    gz::msgs::Boolean rep;
+    bool result = false;
+    if (!gz_.Request(WORLD + "/entity/system/add", req, 3000, rep, result) || !result) {
+      RCLCPP_ERROR(log_, "  %-32s FAILED (Gazebo did not add the plugin)", "grip");
+      return false;
+    }
+    // the release publisher is made now so Gazebo has found it before we need it
+    detach_pub_ = gz_.Advertise<gz::msgs::Empty>("/" + name + "/detach");
     moveit_msgs::msg::AttachedCollisionObject att;
     att.link_name = "suction_tool";
     att.touch_links = {"suction_tool", "wrist_3_link"};
     att.object = box(name, pose, size);
     scene_.applyAttachedCollisionObject(att);
     RCLCPP_INFO(log_, "  %-32s OK", "grip");
+    return true;
   }
 
   void release(const std::string & name)
   {
-    gz_topic("/" + name + "/detach");
+    gz::msgs::Empty msg;
+    detach_pub_.Publish(msg);
+    std::this_thread::sleep_for(100ms);
+    detach_pub_.Publish(msg);   // a second time, just in case (extra detaches are ignored)
     moveit_msgs::msg::AttachedCollisionObject att;
     att.link_name = "suction_tool";
     att.object.id = name;
@@ -360,14 +474,18 @@ private:
   // an operator takes the bag away (failure case)
   void remove_bag(const std::string & name)
   {
-    std::string cmd = "gz service -s /world/bag_hall/remove --reqtype gz.msgs.Entity "
-      "--reptype gz.msgs.Boolean --timeout 3000 --req 'name: \"" + name +
-      "\" type: MODEL' > /dev/null";
-    if (std::system(cmd.c_str()) != 0) {RCLCPP_WARN(log_, "could not remove %s", name.c_str());}
+    gz::msgs::Entity req;
+    req.set_name(name);
+    req.set_type(gz::msgs::Entity::MODEL);
+    gz::msgs::Boolean rep;
+    bool result = false;
+    if (!gz_.Request(WORLD + "/remove", req, 3000, rep, result) || !result) {
+      RCLCPP_WARN(log_, "could not remove %s", name.c_str());
+    }
     scene_.removeCollisionObjects({name});
   }
 
-  void finish(bag_cell_interfaces::msg::BagResult & r, bool success, const std::string & reason,
+  void finish(BagResult & r, bool success, const std::string & reason,
     const rclcpp::Time & t0)
   {
     r.success = success;
@@ -376,25 +494,14 @@ private:
     r.planning_time = planning_time_;
     result_pub_->publish(r);
     RCLCPP_INFO(log_, "==== %s: %s, target %s, landed in %s, %.1f s", r.bag.c_str(),
-      success ? "DONE" : "FAILED", r.target_cart.c_str(), r.actual_cart.c_str(), r.cycle_time);
+      success ? "DONE" : r.target_cart.empty() ? "PROBLEM BAG" : "FAILED", r.target_cart.c_str(), r.actual_cart.c_str(), r.cycle_time);
   }
 
-  static std::string run(const std::string & cmd)
+  void on_gz_poses(const gz::msgs::Pose_V & msg)
   {
-    std::string out;
-    char buf[256];
-    FILE * f = popen(cmd.c_str(), "r");
-    if (!f) {return out;}
-    while (fgets(buf, sizeof(buf), f)) {out += buf;}
-    pclose(f);
-    return out;
-  }
-
-  static void gz_topic(const std::string & topic)
-  {
-    std::string cmd = "gz topic -t " + topic + " -m gz.msgs.Empty -p 'unused: true'";
-    if (std::system(cmd.c_str()) != 0) {
-      throw std::runtime_error("gz command failed: " + cmd);
+    std::lock_guard<std::mutex> lock(ids_mutex_);
+    for (const auto & p : msg.pose()) {
+      if (p.name().rfind("bag_", 0) == 0) {gz_ids_[p.name()] = p.id();}
     }
   }
 
@@ -408,9 +515,15 @@ private:
   rclcpp::Client<srv::PlanPlacement>::SharedPtr plan_;
   rclcpp::Client<srv::ReportPlacement>::SharedPtr report_;
   rclcpp::Client<srv::DispatchCart>::SharedPtr dispatch_;
-  rclcpp::Publisher<bag_cell_interfaces::msg::BagResult>::SharedPtr result_pub_;
+  rclcpp::Publisher<BagResult>::SharedPtr result_pub_;
   double planning_time_ = 0.0;
   std::shared_future<srv::NextBag::Response::SharedPtr> next_bag_;
+  // (declared before gz_: members are destroyed in reverse order, so gz_ stops its
+  //  callbacks before the map they write to is gone)
+  std::mutex ids_mutex_;
+  std::map<std::string, uint64_t> gz_ids_;
+  gz::transport::Node gz_;
+  gz::transport::Node::Publisher detach_pub_;
 };
 
 int main(int argc, char ** argv)

@@ -1,5 +1,7 @@
-# Cart is full: tow it away and bring an empty one.
+# Tow a cart away and bring an empty one (cart full, or its flight closed).
 string cart
+string flight
+string reason
 ---
 bool ok
 int32 bags

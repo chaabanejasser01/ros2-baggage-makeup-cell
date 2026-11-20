@@ -3,6 +3,6 @@ string tag
 ---
 bool known
 string flight
-string cart                        # cart_a, cart_b or cart_reject
+string cart                        # cart_a, cart_b, or "" = problem bag (operator)
 float64 mass                       # kg, from check-in
 string reason

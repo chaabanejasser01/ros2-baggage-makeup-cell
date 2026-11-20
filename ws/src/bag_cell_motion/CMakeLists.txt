@@ -14,12 +14,23 @@ find_package(std_srvs REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(shape_msgs REQUIRED)
 find_package(bag_cell_interfaces REQUIRED)
+find_package(tf2_msgs REQUIRED)
+find_package(gz_transport_vendor REQUIRED)
+find_package(gz-transport REQUIRED)
+find_package(gz_msgs_vendor REQUIRED)
+find_package(gz-msgs REQUIRED)
 
 add_executable(cell_node src/cell_node.cpp)
 ament_target_dependencies(cell_node rclcpp moveit_ros_planning_interface geometry_msgs
   moveit_msgs shape_msgs bag_cell_interfaces)
+target_link_libraries(cell_node gz-transport::core gz-msgs::core)
 
-install(TARGETS cell_node
+# Gazebo -> ROS bag poses by name (the ros_gz bridge drops the names)
+add_executable(gz_pose_relay src/gz_pose_relay.cpp)
+ament_target_dependencies(gz_pose_relay rclcpp tf2_msgs)
+target_link_libraries(gz_pose_relay gz-transport::core gz-msgs::core)
+
+install(TARGETS cell_node gz_pose_relay
   DESTINATION lib/${PROJECT_NAME}
 )
 

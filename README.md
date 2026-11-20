@@ -3,7 +3,7 @@
 [![ROS 2 Jazzy](https://img.shields.io/badge/ROS%202-Jazzy-22314E?logo=ros&logoColor=white)](https://docs.ros.org/en/jazzy/)
 [![MoveIt 2](https://img.shields.io/badge/MoveIt-2-2D6DB5)](https://moveit.ai/)
 [![Gazebo Harmonic](https://img.shields.io/badge/Gazebo-Harmonic-FF6F00?logo=gazebo&logoColor=white)](https://gazebosim.org/)
-[![UR10e](https://img.shields.io/badge/Robot-UR10e-0A5C8A)](https://www.universal-robots.com/)
+[![UR20](https://img.shields.io/badge/Robot-UR20-0A5C8A)](https://www.universal-robots.com/)
 [![C++ / Python](https://img.shields.io/badge/Code-C%2B%2B%20%7C%20Python-informational)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -11,11 +11,11 @@ A simulated robot cell that sorts checked bags from a conveyor into per-flight c
 the **baggage make-up** step that is still done by hand at regional airports such as
 Monastir (Tunisia).
 
-A **UR10e with a suction cup** waits at the end of a make-up belt. Each bag stops at a
+A **UR20 with a suction cup** waits at the end of a make-up belt. Each bag stops at a
 photo-eye, an **overhead depth camera** measures it, its tag is looked up in the check-in
 manifest to find its flight, a **height-map packer** picks a spot in that flight's cart,
 and **MoveIt 2** plans the pick and the place. Bags with no tag read, unknown or late bags,
-and mis-sorted ones go to a reject cart. Every run writes CSV logs and a Markdown summary.
+and mis-sorted ones are left to an operator (taken off the belt). Every run writes CSV logs and a Markdown summary.
 
 > **Scope:** a proof of concept in simulation, to measure feasibility (success rate, cycle
 > time, throughput). It makes no claims about cost or ROI.
@@ -24,13 +24,27 @@ and mis-sorted ones go to a reject cart. Every run writes CSV logs and a Markdow
 
 ---
 
-## 📊 Example Result (5 bags, seed 1)
+## 📊 Example Result (10 bags, seed 1)
 
 | Metric | Value |
 | :--- | :--- |
+| Problem bags, taken off by the operator | 2 (tag no-reads, as intended) |
+| Pick-and-place success | **8/8 (100 %)** |
+| Correct cart (of successful picks) | **8/8 (100 %)** |
+| Mean cycle time (sim) | 8.8 s |
+| Throughput, 1 robot (3600 / cycle) | **408 bags/h** |
+| Mean MoveIt planning time per bag | 0.30 s |
+| Perception: centre error | 2.5 mm |
+| Perception: long / short side error | 3.5 mm / 3.5 mm |
+| Perception: yaw error | 0.01° |
+
+Full output: [`results/run_20261121_005232/`](results/run_20261121_005232/)
+(`bags.csv`, `carts.csv`, `summary.md`)
+
+--- | :--- |
 | Pick-and-place success | **5/5 (100 %)** |
 | Correct cart (of successful picks) | **5/5 (100 %)** |
-| Sent to reject | 1 (tag no-read, as intended) |
+| Problem bags (operator) | 1 (tag no-read, as intended) |
 | Mean cycle time (sim) | 14.2 s |
 | Throughput, 1 robot | **254 bags/h** |
 | Mean MoveIt planning time per bag | 0.17 s |
@@ -53,15 +67,16 @@ Full output: [`results/run_20261118_224155/`](results/run_20261118_224155/)
   gives the centre, yaw, length, width and height.
 - **Flight routing with a schedule**: a check-in manifest and a compressed airport clock.
   Each flight's make-up opens and closes on one of two cart positions. No-reads (5 %, like a
-  real ATR), unknown tags, mis-sorted, early and late bags go to the reject cart.
+  real ATR), unknown tags, mis-sorted, early and late bags are
+  taken off the belt by an operator; the robot only loads good bags.
 - **Height-map cart packing** (palletizing-style): the cart floor is a 5 cm grid. Each bag
-  goes where it rests lowest, then snug against walls and other bags. Spots with less than
+  goes where it rests lowest, filling the cart from the back. Spots with less than
   60 % support, or that the arm can't reach, are rejected. The map is updated with where the
   bag **really** landed in Gazebo.
 - **MoveIt 2 motion**: OMPL for free moves around the cell, straight Cartesian moves near
   the bag and the cart. Bags are symmetric, so the planner can choose between yaw and
   yaw + 180°.
-- **Tuned for reliability**: the UR10e joint limits are restricted to a single arm posture
+- **Tuned for reliability**: the UR20 joint limits are restricted to a single arm posture
   (elbow up, tool down), and **TRAC-IK** (Speed mode) replaces KDL.
 - **Suction grip in Gazebo**: `DetachableJoint` is added to the bag at runtime through
   gz-transport, without calling the slow `gz` command line.
@@ -81,7 +96,7 @@ flowchart LR
         BELT_GZ["Conveyor + bags"]
         EYE["Photo-eye<br/>(gpu_lidar)"]
         CAM["Overhead depth camera"]
-        UR["UR10e + suction cup"]
+        UR["UR20 + suction cup"]
     end
 
     subgraph SCENE["bag_cell_scene"]
@@ -137,7 +152,7 @@ sequenceDiagram
     C->>D: /detect_bag
     D-->>C: centre, yaw, size
     C->>R: /route_bag (tag)
-    R-->>C: flight + cart (or reject + reason)
+    R-->>C: flight + cart (or "" = problem bag + reason)
     C->>K: /plan_placement (cart, size)
     alt cart full
         C->>K: /dispatch_cart, then plan again
@@ -156,7 +171,7 @@ it in while the arm is still placing.
 
 | Package | Language | Contents |
 | :--- | :--- | :--- |
-| `bag_cell_description` | xacro / YAML | UR10e + suction tool URDF, cell-specific joint limits |
+| `bag_cell_description` | xacro / YAML | UR20 + suction tool URDF, cell-specific joint limits |
 | `bag_cell_bringup` | Python launch / SDF | Gazebo world (+ generator script), launch files, MoveIt config, TRAC-IK |
 | `bag_cell_scene` | Python | Belt controller, flight router, MoveIt collision scene, check-in manifest |
 | `bag_cell_perception` | Python + OpenCV | Overhead depth-camera bag detector |
@@ -170,7 +185,7 @@ it in while the arm is still placing.
 | :--- | :--- | :--- |
 | `NextBag` | srv | Wait for the next bag at the photo-eye: name, tag read, ground truth |
 | `DetectBag` | srv | Measure the bag in the pick zone: pose + size |
-| `RouteBag` | srv | Tag → flight → cart (`cart_a`, `cart_b`, `cart_reject`) + reason |
+| `RouteBag` | srv | Tag → flight → cart (`cart_a`, `cart_b`, or `""` = problem bag) + reason |
 | `PlanPlacement` | srv | Release pose for a bag in a cart, or "full" |
 | `ReportPlacement` | srv | Where the bag really landed (from Gazebo) |
 | `DispatchCart` | srv | Tow a cart away (full / flight closed) and bring an empty one |
@@ -239,7 +254,22 @@ ros2 launch bag_cell_bringup cell.launch.py num_bags:=10
 
 Results appear in `results_dir/run_<timestamp>/`.
 
-### 4. Tests
+### 4. Record a demo video
+
+Gazebo without RViz looks best on video. Start the sim with `rviz:=false`, then record the
+screen with `ffmpeg` while the cell runs:
+
+```bash
+ffmpeg -video_size 1920x1080 -framerate 30 -f x11grab -i :0.0 -c:v libx264 -preset ultrafast -crf 23 demo.mp4
+```
+
+Stop with `q`. To make a short GIF for this page:
+
+```bash
+ffmpeg -ss 0 -t 20 -i demo.mp4 -vf "fps=12,scale=960:-1:flags=lanczos" demo.gif
+```
+
+### 5. Tests
 
 ```bash
 colcon test --packages-select bag_cell_scene && colcon test-result --verbose

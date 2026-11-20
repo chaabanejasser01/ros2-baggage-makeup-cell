@@ -1,12 +1,12 @@
 <?xml version="1.0"?>
-<!-- UR10e + suction cup, for the baggage cell.
+<!-- UR20 + suction cup, for the baggage cell (1.75 m reach, 20 kg payload).
      Same as ur_simulation_gz/urdf/ur_gz.urdf.xacro, plus the suction tool at the end. -->
 <robot xmlns:xacro="http://wiki.ros.org/xacro" name="$(arg name)">
   <xacro:arg name="name" default="ur"/>
   <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
   <xacro:include filename="$(find ur_simulation_gz)/urdf/ur_gz.ros2_control.xacro"/>
 
-  <xacro:arg name="ur_type" default="ur10e"/>
+  <xacro:arg name="ur_type" default="ur20"/>
   <xacro:arg name="tf_prefix" default=""/>
   <xacro:arg name="joint_limit_params" default="$(find bag_cell_description)/config/joint_limits.yaml"/>
   <xacro:arg name="kinematics_params" default="$(find ur_description)/config/$(arg ur_type)/default_kinematics.yaml"/>

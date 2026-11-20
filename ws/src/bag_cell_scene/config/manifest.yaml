@@ -1,48 +1,53 @@
-# Check-in manifest: what the airline check-in system knows about each bag,
-# in the order the bags arrive on the belt. The tag reader gives the tag number,
-# the flight router looks it up here. TU880 is not built at this cell -> reject.
+# Check-in manifest + make-up schedule of this station (one robot cell).
+#
+# Time is compressed: 1 s of simulation = 1 min of airport time (time_scale).
+# The airport clock starts at 'start' when the robot asks for its first bag.
+# Each flight's make-up opens at 'open' on a free position (cart A or B) and closes at
+# 'close' (about 40 min before departure): its cart is towed to the aircraft and the
+# position takes the next flight. Bags are listed in check-in order; the early-bag store
+# keeps a bag until its flight's make-up opens.
+# TU880 is built at another station: a bag of it here was mis-sorted -> operator.
 # Bag sizes: cabin 0.40x0.25x0.20, medium 0.55x0.35x0.25, large 0.70x0.45x0.28 m.
-flights:
-  TU214: cart_a
-  BJ552: cart_b
+time_scale: 1.0     # airport minutes per simulated second
+start: "12:00"
+positions: [cart_a, cart_b]
+schedule:
+  - {flight: TU214, dest: Paris-Orly, std: "14:55", open: "12:00", close: "14:15"}
+  - {flight: BJ552, dest: Lyon, std: "16:10", open: "12:00", close: "15:30"}
+  - {flight: TU516, dest: Nice, std: "17:00", open: "14:15", close: "16:20"}
+  - {flight: BJ318, dest: Brussels, std: "18:10", open: "15:30", close: "17:30"}
+  - {flight: TU720, dest: Frankfurt, std: "19:00", open: "16:20", close: "18:20"}
+  - {flight: BJ104, dest: Paris-CDG, std: "20:10", open: "17:30", close: "19:30"}
 bags:
-  - {tag: "0526612300", flight: BJ552, type: cabin, mass: 5.2}
-  - {tag: "0199612307", flight: TU214, type: cabin, mass: 6.5}
-  - {tag: "0199612314", flight: TU214, type: medium, mass: 7.7}
-  - {tag: "0526612321", flight: BJ552, type: cabin, mass: 4.1}
-  - {tag: "0526612328", flight: BJ552, type: medium, mass: 6.2}
-  - {tag: "0199612335", flight: TU214, type: large, mass: 8.8}
-  - {tag: "0199612342", flight: TU880, type: cabin, mass: 6.8}
-  - {tag: "0199612349", flight: TU880, type: cabin, mass: 5.7}
-  - {tag: "0526612356", flight: BJ552, type: cabin, mass: 6.9}
-  - {tag: "0199612363", flight: TU214, type: large, mass: 9.7}
-  - {tag: "0526612370", flight: BJ552, type: medium, mass: 6.4}
-  - {tag: "0199612377", flight: TU214, type: large, mass: 8.6}
-  - {tag: "0199612384", flight: TU214, type: cabin, mass: 5.7}
-  - {tag: "0199612391", flight: TU214, type: medium, mass: 6.3}
-  - {tag: "0199612398", flight: TU214, type: large, mass: 8.1}
-  - {tag: "0199612405", flight: TU214, type: medium, mass: 8.0}
-  - {tag: "0526612412", flight: BJ552, type: medium, mass: 7.4}
-  - {tag: "0526612419", flight: BJ552, type: medium, mass: 6.9}
-  - {tag: "0199612426", flight: TU214, type: large, mass: 9.6}
-  - {tag: "0199612433", flight: TU214, type: large, mass: 8.6}
-  - {tag: "0526612440", flight: BJ552, type: medium, mass: 8.2}
-  - {tag: "0526612447", flight: BJ552, type: large, mass: 10.0}
-  - {tag: "0199612454", flight: TU214, type: large, mass: 8.8}
-  - {tag: "0526612461", flight: BJ552, type: cabin, mass: 6.8}
-  - {tag: "0526612468", flight: BJ552, type: cabin, mass: 6.9}
-  - {tag: "0199612475", flight: TU214, type: large, mass: 9.1}
-  - {tag: "0526612482", flight: BJ552, type: medium, mass: 8.1}
-  - {tag: "0199612489", flight: TU880, type: medium, mass: 7.7}
-  - {tag: "0526612496", flight: BJ552, type: cabin, mass: 6.5}
-  - {tag: "0199612503", flight: TU214, type: medium, mass: 8.1}
-  - {tag: "0199612510", flight: TU214, type: cabin, mass: 6.2}
-  - {tag: "0526612517", flight: BJ552, type: large, mass: 9.2}
-  - {tag: "0526612524", flight: BJ552, type: medium, mass: 8.1}
-  - {tag: "0526612531", flight: BJ552, type: cabin, mass: 6.8}
-  - {tag: "0526612538", flight: BJ552, type: cabin, mass: 5.8}
-  - {tag: "0526612545", flight: BJ552, type: cabin, mass: 4.7}
-  - {tag: "0526612552", flight: BJ552, type: cabin, mass: 6.2}
-  - {tag: "0526612559", flight: BJ552, type: medium, mass: 8.8}
-  - {tag: "0526612566", flight: BJ552, type: cabin, mass: 4.5}
-  - {tag: "0526612573", flight: BJ552, type: large, mass: 8.6}
+  - {tag: "0199612307", flight: TU214, type: cabin, mass: 6.0}
+  - {tag: "0199612314", flight: TU214, type: medium, mass: 6.9}
+  - {tag: "0199612321", flight: TU214, type: medium, mass: 6.1}
+  - {tag: "0199612328", flight: TU214, type: cabin, mass: 4.3}
+  - {tag: "0199612335", flight: TU214, type: large, mass: 8.2}
+  - {tag: "0199612342", flight: TU214, type: medium, mass: 8.4}
+  - {tag: "0199612349", flight: TU880, type: medium, mass: 7.0}
+  - {tag: "0526612356", flight: BJ552, type: cabin, mass: 6.6}
+  - {tag: "0526612363", flight: BJ552, type: cabin, mass: 4.4}
+  - {tag: "0526612370", flight: BJ552, type: large, mass: 8.4}
+  - {tag: "0526612377", flight: BJ552, type: medium, mass: 6.9}
+  - {tag: "0526612384", flight: BJ552, type: cabin, mass: 4.2}
+  - {tag: "0526612391", flight: BJ552, type: medium, mass: 7.1}
+  - {tag: "0526612398", flight: BJ552, type: medium, mass: 7.1}
+  - {tag: "0199612405", flight: TU516, type: medium, mass: 7.7}
+  - {tag: "0199612412", flight: TU516, type: medium, mass: 7.3}
+  - {tag: "0199612419", flight: TU516, type: medium, mass: 6.7}
+  - {tag: "0526612426", flight: BJ318, type: cabin, mass: 5.3}
+  - {tag: "0526612433", flight: BJ318, type: cabin, mass: 5.5}
+  - {tag: "0526612440", flight: BJ318, type: medium, mass: 7.9}
+  - {tag: "0526612447", flight: BJ318, type: large, mass: 8.6}
+  - {tag: "0199612454", flight: TU880, type: medium, mass: 7.5}
+  - {tag: "0526612461", flight: BJ318, type: medium, mass: 8.1}
+  - {tag: "0199612468", flight: TU720, type: medium, mass: 7.7}
+  - {tag: "0199612475", flight: TU720, type: medium, mass: 7.6}
+  - {tag: "0199612482", flight: TU720, type: large, mass: 8.6}
+  - {tag: "0199612489", flight: TU720, type: medium, mass: 6.1}
+  - {tag: "0526612496", flight: BJ104, type: cabin, mass: 4.4}
+  - {tag: "0526612503", flight: BJ104, type: medium, mass: 6.3}
+  - {tag: "0526612510", flight: BJ104, type: cabin, mass: 6.6}
+  - {tag: "0526612517", flight: BJ104, type: medium, mass: 7.4}
+  - {tag: "0526612524", flight: BJ104, type: large, mass: 9.7}

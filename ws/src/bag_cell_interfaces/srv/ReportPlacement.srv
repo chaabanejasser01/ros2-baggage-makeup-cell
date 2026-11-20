@@ -4,5 +4,5 @@ string bag
 geometry_msgs/Vector3 size
 float64 mass
 ---
-string actual_cart                 # cart_a, cart_b, cart_reject, belt, floor
+string actual_cart                 # cart_a, cart_b, belt, floor
 geometry_msgs/Pose pose
