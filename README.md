@@ -19,7 +19,12 @@ and **MoveIt 2** plans the pick and the place. Every run writes CSV logs and a M
 > **Scope:** a proof of concept in simulation, to measure feasibility (success rate, cycle
 > time, throughput). It makes no claims about cost or ROI.
 
-<!-- Demo GIF / screenshots go here (docs/media/) -->
+## 🎬 Demonstration
+
+![Baggage cell demo: Gazebo and RViz side by side (6x speed)](docs/media/demo.gif)
+
+> *Gazebo (left) and MoveIt 2 in RViz (right), 6x speed.
+> Higher-quality video at 4x: [`docs/media/demo.mp4`](docs/media/demo.mp4)*
 
 ---
 
