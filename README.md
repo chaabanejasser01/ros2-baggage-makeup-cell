@@ -14,8 +14,7 @@ Monastir (Tunisia).
 A **UR20 with a suction cup** waits at the end of a make-up belt. Each bag stops at a
 photo-eye, an **overhead depth camera** measures it, its tag is looked up in the check-in
 manifest to find its flight, a **height-map packer** picks a spot in that flight's cart,
-and **MoveIt 2** plans the pick and the place. Bags with no tag read, unknown or late bags,
-and mis-sorted ones are left to an operator (taken off the belt). Every run writes CSV logs and a Markdown summary.
+and **MoveIt 2** plans the pick and the place. Every run writes CSV logs and a Markdown summary.
 
 > **Scope:** a proof of concept in simulation, to measure feasibility (success rate, cycle
 > time, throughput). It makes no claims about cost or ROI.
@@ -28,31 +27,16 @@ and mis-sorted ones are left to an operator (taken off the belt). Every run writ
 
 | Metric | Value |
 | :--- | :--- |
-| Problem bags, taken off by the operator | 2 (tag no-reads, as intended) |
-| Pick-and-place success | **8/8 (100 %)** |
-| Correct cart (of successful picks) | **8/8 (100 %)** |
+| Pick-and-place success | **10/10 (100 %)** |
+| Correct cart (of successful picks) | **10/10 (100 %)** |
 | Mean cycle time (sim) | 8.8 s |
-| Throughput, 1 robot (3600 / cycle) | **408 bags/h** |
-| Mean MoveIt planning time per bag | 0.30 s |
-| Perception: centre error | 2.5 mm |
-| Perception: long / short side error | 3.5 mm / 3.5 mm |
-| Perception: yaw error | 0.01° |
+| Throughput, 1 robot | **410 bags/h** |
+| Mean MoveIt planning time per bag | 0.28 s |
+| Perception: centre error | 2.4 mm |
+| Perception: long / short side error | 3.2 mm / 3.4 mm |
+| Perception: yaw error | 0.04° |
 
-Full output: [`results/run_20261121_005232/`](results/run_20261121_005232/)
-(`bags.csv`, `carts.csv`, `summary.md`)
-
---- | :--- |
-| Pick-and-place success | **5/5 (100 %)** |
-| Correct cart (of successful picks) | **5/5 (100 %)** |
-| Problem bags (operator) | 1 (tag no-read, as intended) |
-| Mean cycle time (sim) | 14.2 s |
-| Throughput, 1 robot | **254 bags/h** |
-| Mean MoveIt planning time per bag | 0.17 s |
-| Perception: centre error | 2.6 mm |
-| Perception: long / short side error | 3.6 mm / 3.6 mm |
-| Perception: yaw error | 0.03° |
-
-Full output: [`results/run_20261118_224155/`](results/run_20261118_224155/)
+Full output: [`results/run_20261121_010234/`](results/run_20261121_010234/)
 (`bags.csv`, `carts.csv`, `summary.md`)
 
 ---
@@ -66,9 +50,8 @@ Full output: [`results/run_20261118_224155/`](results/run_20261118_224155/)
   to 3D, the bag that stopped the belt is isolated, and `cv2.minAreaRect` on its top face
   gives the centre, yaw, length, width and height.
 - **Flight routing with a schedule**: a check-in manifest and a compressed airport clock.
-  Each flight's make-up opens and closes on one of two cart positions. No-reads (5 %, like a
-  real ATR), unknown tags, mis-sorted, early and late bags are
-  taken off the belt by an operator; the robot only loads good bags.
+  Each flight's make-up opens and closes on one of two cart positions; an early-bag store
+  holds a bag until its flight opens.
 - **Height-map cart packing** (palletizing-style): the cart floor is a 5 cm grid. Each bag
   goes where it rests lowest, filling the cart from the back. Spots with less than
   60 % support, or that the arm can't reach, are rejected. The map is updated with where the
@@ -152,7 +135,7 @@ sequenceDiagram
     C->>D: /detect_bag
     D-->>C: centre, yaw, size
     C->>R: /route_bag (tag)
-    R-->>C: flight + cart (or "" = problem bag + reason)
+    R-->>C: flight + cart
     C->>K: /plan_placement (cart, size)
     alt cart full
         C->>K: /dispatch_cart, then plan again
@@ -185,7 +168,7 @@ it in while the arm is still placing.
 | :--- | :--- | :--- |
 | `NextBag` | srv | Wait for the next bag at the photo-eye: name, tag read, ground truth |
 | `DetectBag` | srv | Measure the bag in the pick zone: pose + size |
-| `RouteBag` | srv | Tag → flight → cart (`cart_a`, `cart_b`, or `""` = problem bag) + reason |
+| `RouteBag` | srv | Tag → flight → cart (`cart_a` or `cart_b`) |
 | `PlanPlacement` | srv | Release pose for a bag in a cart, or "full" |
 | `ReportPlacement` | srv | Where the bag really landed (from Gazebo) |
 | `DispatchCart` | srv | Tow a cart away (full / flight closed) and bring an empty one |
@@ -281,7 +264,7 @@ colcon test --packages-select bag_cell_scene && colcon test-result --verbose
 
 | Parameter | Where | Default | Meaning |
 | :--- | :--- | :--- | :--- |
-| `seed` | `bag_cell.launch.py` | `1` | Random seed (no-reads, bag offsets) |
+| `seed` | `bag_cell.launch.py` | `1` | Random seed (bag positions on the belt) |
 | `results_dir` | `bag_cell.launch.py` | `~/bag_cell_results` | Output folder for CSV + summary |
 | `rviz` | `bag_cell.launch.py` | `true` | Start RViz |
 | `num_bags` | `cell.launch.py` | `10` | Bags to handle in this run |
@@ -298,9 +281,10 @@ regenerates `bag_hall.sdf` and the sign textures.
 ## ⚠️ Limitations
 
 - Simulation only. Bags are rigid boxes with simplified physics.
-- Tag reading is simulated with a random no-read rate, with no real barcode or RFID.
+- Every tag is read: no no-reads, mis-sorted or late bags (in a real hall these go to
+  manual handling). No real barcode or RFID.
 - Flight lookup uses a static manifest, not a live airline / BHS system.
-- A single robot and two make-up positions. Arm reach limits each cart to about 4–6 bags.
+- A single robot and two make-up positions. Arm reach limits each 1.6 × 1.2 m cart to about 14–20 bags.
 
 ---
 

@@ -12,7 +12,7 @@ Airport clock: starts when the robot asks for its first bag; published on
 /cell/airport_clock (minutes after 'start', 1 s of sim = time_scale minutes).
 
 Service /next_bag (bag_cell_interfaces/NextBag): waits until a bag is stopped at the
-photo-eye and answers with its name + tag (5 % no-read, like a real ATR) + ground truth
+photo-eye and answers with its name + tag + ground truth
 (only used to score the camera). If the bag handed out last time is still in the beam
 (robot failed), an operator takes it off first.
 """
@@ -74,7 +74,6 @@ class BeltController(Node):
         self.declare_parameter("manifest", default)
         self.declare_parameter("world", "bag_hall")
         self.declare_parameter("speed", 0.7)          # m/s
-        self.declare_parameter("no_read_rate", 0.05)
         self.declare_parameter("seed", 1)
         with open(self.get_parameter("manifest").value) as f:
             data = yaml.safe_load(f)
@@ -217,11 +216,10 @@ class BeltController(Node):
             res.true_pose.orientation.z = math.sin(p[3] / 2)
             res.true_pose.orientation.w = math.cos(p[3] / 2)
         entry = bag["entry"]
-        read = "" if self.rng.random() < self.get_parameter("no_read_rate").value else entry["tag"]
-        res.success, res.name, res.tag, res.true_mass = True, bag["name"], read, bag["mass"]
+        res.success, res.name, res.tag, res.true_mass = True, bag["name"], entry["tag"], bag["mass"]
         res.true_size.x, res.true_size.y, res.true_size.z = bag["size"]
         res.message = (f"{bag['name']} ({entry['type']}, {bag['mass']} kg) stopped at the pick "
-                       f"zone, tag read: '{read or 'NO-READ'}', {len(self.on_belt)} more on the belt")
+                       f"zone, tag {entry['tag']}, {len(self.on_belt)} more on the belt")
         self.get_logger().info(res.message)
         self.at_eye, self.ready = bag["name"], res
 

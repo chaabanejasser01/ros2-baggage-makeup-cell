@@ -1,11 +1,11 @@
 # One line of the cell's log: what happened to one bag.
 string bag
-string tag                         # 10-digit licence plate read by the ATR ("" = no-read)
+string tag                         # 10-digit licence plate
 string flight
-string target_cart                 # cart chosen by the flight router ("" = problem bag)
+string target_cart                 # cart chosen by the flight router
 string actual_cart                 # where the bag really ended (checked in Gazebo)
 bool success                       # picked and placed without a motion failure
-string reason                      # problem bag (no-read, late...) / why it failed
+string reason                      # "ok" or why it failed
 float64 cycle_time                 # s (sim time) from bag arrival to robot free again
 float64 planning_time              # s spent in MoveIt planning for this bag
 float64 mass                       # kg (from the BSM)

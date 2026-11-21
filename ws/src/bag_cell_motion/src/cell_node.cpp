@@ -141,11 +141,9 @@ public:
     }
     score_camera(r, *det, *bag);
 
-    // 3. which cart? ("" = problem bag: no-read, early, late, mis-sorted. The robot does not
-    //    take it: it is taken off the belt at once and handled by hand.)
+    // 3. which cart?
     std::string cart = route(r);
-    if (cart.empty()) {return give_up(r, "problem bag (" + r.reason + "): taken off by operator",
-          t0, more, true);}
+    if (cart.empty()) {return give_up(r, "no cart: " + r.reason, t0, more, true);}
 
     // 4. where in the cart? (cart full: it is dispatched, an empty one comes)
     auto plan = plan_in(cart, det->size);
@@ -494,7 +492,7 @@ private:
     r.planning_time = planning_time_;
     result_pub_->publish(r);
     RCLCPP_INFO(log_, "==== %s: %s, target %s, landed in %s, %.1f s", r.bag.c_str(),
-      success ? "DONE" : r.target_cart.empty() ? "PROBLEM BAG" : "FAILED", r.target_cart.c_str(), r.actual_cart.c_str(), r.cycle_time);
+      success ? "DONE" : "FAILED", r.target_cart.c_str(), r.actual_cart.c_str(), r.cycle_time);
   }
 
   void on_gz_poses(const gz::msgs::Pose_V & msg)

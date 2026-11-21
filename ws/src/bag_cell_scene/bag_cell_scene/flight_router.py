@@ -7,14 +7,8 @@ positions are reused:
     position is free for the next flight
 The airport clock comes from the belt controller (/cell/airport_clock, minutes after start).
 
-Routing of a bag (cart "" = problem bag: the robot leaves it, an operator takes it off
-the belt and handles it by hand):
-    tag ""                         -> ""  (no-read)
-    tag not in manifest            -> ""  (unknown bag)
-    flight not on this station     -> ""  (mis-sorted)
-    flight not open yet            -> ""  (early bag)
-    less than 20 min before close  -> ""  (late bag: rush)
-    otherwise                      -> the cart of that flight
+Routing of a bag: tag -> flight (manifest) -> the cart of that flight.
+(The early-bag store only releases a bag once its flight is open, so it always has a cart.)
 """
 import rclpy
 import yaml
@@ -25,8 +19,6 @@ from rclpy.node import Node
 from std_msgs.msg import Float64, String
 
 from bag_cell_interfaces.srv import DispatchCart, RouteBag
-
-LATE_CUTOFF = 20.0   # airport minutes before close: no more bags into the cart
 
 
 def minutes(hhmm, start):
@@ -94,25 +86,12 @@ class FlightRouter(Node):
         self.board_pub.publish(String(data=" | ".join(board)))
 
     def route_cb(self, req, res):
-        bag = self.bags.get(req.tag)
-        res.cart, res.mass, res.known = "", 10.0, bag is not None
-        if not req.tag:
-            res.reason = "no-read"
-        elif bag is None:
-            res.reason = "unknown tag"
-        else:
-            res.flight, res.mass = bag["flight"], float(bag["mass"])
-            s = self.flights.get(bag["flight"])
-            if s is None:
-                res.reason = "mis-sorted (other station)"
-            elif s["state"] == "planned":
-                res.reason = "early bag (make-up not open)"
-            elif s["state"] == "closed" or self.clock > s["close_m"] - LATE_CUTOFF:
-                res.reason = "late bag (rush)"
-            else:
-                res.cart, res.reason = self.cart_of[bag["flight"]], "ok"
-        self.get_logger().info(f"{hhmm(self.clock, self.start)} tag '{req.tag}' -> {res.cart or 'operator'} "
-                               f"({res.reason})")
+        bag = self.bags[req.tag]
+        res.known, res.flight, res.mass = True, bag["flight"], float(bag["mass"])
+        res.cart = self.cart_of.get(bag["flight"], "")   # "" = flight not open (should not happen)
+        res.reason = "ok" if res.cart else "flight not open"
+        self.get_logger().info(f"{hhmm(self.clock, self.start)} tag '{req.tag}' -> "
+                               f"{bag['flight']} -> {res.cart or 'no cart'}")
         return res
 
 

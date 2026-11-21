@@ -26,7 +26,7 @@ def generate_launch_description():
                               description="Gazebo window (false = faster runs, results only)"),
         DeclareLaunchArgument("results_dir",
                               default_value=os.path.expanduser("~/bag_cell_results")),
-        DeclareLaunchArgument("seed", default_value="1", description="random seed (no-reads, bag offsets)"),
+        DeclareLaunchArgument("seed", default_value="1", description="random seed (bag positions on the belt)"),
     ]
 
     # Gazebo finds the sign textures (model://bag_hall_textures/...) here

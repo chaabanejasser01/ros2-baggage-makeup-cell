@@ -65,10 +65,8 @@ class MetricsLogger(Node):
 
     def write_summary(self):
         b = self.bags
-        problem = [r for r in b if not r["target_cart"]]   # no-read, late...: operator
-        robot = [r for r in b if r["target_cart"]]         # bags the robot had to load
         n = len(b)
-        ok = [r for r in robot if r["success"]]
+        ok = [r for r in b if r["success"]]
         sorted_ok = [r for r in ok if r["actual_cart"] == r["target_cart"]]
         measured = [r for r in b if r["meas_L"] > 0]
         cyc = mean([r["cycle_time"] for r in ok])
@@ -78,10 +76,7 @@ class MetricsLogger(Node):
             "# Baggage cell run summary", "",
             f"Bags handled: **{n}**", "",
             "| Metric | Value |", "|---|---|",
-            f"| Problem bags, taken off by the operator (no-read, early, late...) | "
-            f"{len(problem)} |",
-            f"| Pick-and-place success | {len(ok)}/{len(robot)} "
-            f"({100 * len(ok) / max(len(robot), 1):.0f} %) |",
+            f"| Pick-and-place success | {len(ok)}/{n} ({100 * len(ok) / max(n, 1):.0f} %) |",
             f"| Correct cart (of successful picks) | {len(sorted_ok)}/{len(ok)} "
             f"({100 * len(sorted_ok) / max(len(ok), 1):.0f} %) |",
             f"| Mean cycle time (sim s) | {cyc:.1f} |",
@@ -131,7 +126,7 @@ class MetricsLogger(Node):
             if not r["success"]:
                 reasons[r["reason"]] = reasons.get(r["reason"], 0) + 1
         if reasons:
-            lines += ["", "## Problem bags and failures", "", "| Reason | Count |", "|---|---|"]
+            lines += ["", "## Failures", "", "| Reason | Count |", "|---|---|"]
             lines += [f"| {k} | {v} |" for k, v in sorted(reasons.items())]
         with open(os.path.join(self.dir, "summary.md"), "w") as f:
             f.write("\n".join(lines) + "\n")

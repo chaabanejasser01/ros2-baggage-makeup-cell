@@ -9,7 +9,7 @@ __pycache__/
 
 # Run results (keep one example run, see README)
 results/*
-!results/run_20261118_224155/
+!results/run_20261121_010234/
 
 # Editors / OS
 .vscode/

@@ -1,6 +1,0 @@
-bag,tag,flight,target_cart,actual_cart,success,reason,cycle_time,planning_time,mass,meas_L,meas_S,meas_H,true_L,true_S,true_H,position_error,yaw_error
-bag_1,0526612300,BJ552,cart_b,cart_b,1,ok,21.59,0.18,5.2,0.404,0.254,0.2,0.4,0.25,0.2,0.0026,0.0001
-bag_2,0199612307,TU214,cart_a,cart_a,1,ok,13.15,0.171,6.5,0.404,0.253,0.2,0.4,0.25,0.2,0.0026,0.0016
-bag_3,,,cart_reject,cart_reject,1,no-read,12.27,0.163,10.0,0.553,0.354,0.25,0.55,0.35,0.25,0.0025,0.0001
-bag_4,0526612321,BJ552,cart_b,cart_b,1,ok,12.3,0.156,4.1,0.404,0.254,0.2,0.4,0.25,0.2,0.0026,0.0003
-bag_5,0526612328,BJ552,cart_b,cart_b,1,ok,11.5,0.202,6.2,0.553,0.353,0.25,0.55,0.35,0.25,0.0025,0.0002

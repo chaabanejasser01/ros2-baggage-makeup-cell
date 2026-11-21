@@ -6,7 +6,6 @@
 # 'close' (about 40 min before departure): its cart is towed to the aircraft and the
 # position takes the next flight. Bags are listed in check-in order; the early-bag store
 # keeps a bag until its flight's make-up opens.
-# TU880 is built at another station: a bag of it here was mis-sorted -> operator.
 # Bag sizes: cabin 0.40x0.25x0.20, medium 0.55x0.35x0.25, large 0.70x0.45x0.28 m.
 time_scale: 1.0     # airport minutes per simulated second
 start: "12:00"
@@ -25,7 +24,6 @@ bags:
   - {tag: "0199612328", flight: TU214, type: cabin, mass: 4.3}
   - {tag: "0199612335", flight: TU214, type: large, mass: 8.2}
   - {tag: "0199612342", flight: TU214, type: medium, mass: 8.4}
-  - {tag: "0199612349", flight: TU880, type: medium, mass: 7.0}
   - {tag: "0526612356", flight: BJ552, type: cabin, mass: 6.6}
   - {tag: "0526612363", flight: BJ552, type: cabin, mass: 4.4}
   - {tag: "0526612370", flight: BJ552, type: large, mass: 8.4}
@@ -40,7 +38,6 @@ bags:
   - {tag: "0526612433", flight: BJ318, type: cabin, mass: 5.5}
   - {tag: "0526612440", flight: BJ318, type: medium, mass: 7.9}
   - {tag: "0526612447", flight: BJ318, type: large, mass: 8.6}
-  - {tag: "0199612454", flight: TU880, type: medium, mass: 7.5}
   - {tag: "0526612461", flight: BJ318, type: medium, mass: 8.1}
   - {tag: "0199612468", flight: TU720, type: medium, mass: 7.7}
   - {tag: "0199612475", flight: TU720, type: medium, mass: 7.6}

@@ -2,7 +2,7 @@
 ---
 bool success
 string name                        # Gazebo model name, e.g. bag_7
-string tag                         # what the tag reader read ("" = no-read)
+string tag                         # bag tag (licence plate)
 geometry_msgs/Pose true_pose       # ground truth (only to score the camera)
 geometry_msgs/Vector3 true_size    # x long, y short, z height
 float64 true_mass
